@@ -1,0 +1,4 @@
+-r requirements.txt
+tqdm>=4.66,<5
+shapely>=2,<3
+colorlog>=6,<7

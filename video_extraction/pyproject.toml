@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wecom-video-extraction"
+version = "0.1.0"
+description = "Video-to-personnel and department-membership extraction, based on RapidVideOCR"
+requires-python = ">=3.10"
+dependencies = ["numpy>=2.1,<3", "opencv-python-headless>=4.10,<5", "tqdm>=4.66,<5", "shapely>=2,<3", "colorlog>=6,<7"]
+
+[tool.setuptools.packages.find]
+include = ["rapid_videocr*"]

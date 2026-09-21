@@ -1,69 +1,173 @@
-# 企业微信通讯录录屏助手（可校准原型）
+# 企业微信通讯录：自动录屏与视频信息提取
 
-自动展开组织树、逐行点击并停留，使用 FFmpeg 录制组织树和右侧详情，供后续 OCR。无模型、无实时 OCR、无企业接口。全部结果留在本机。
+[English](README.en.md) · [录屏详细指南](RECORDER_GUIDE.md) · [算法流程图](ALGORITHM.md) · [解析模块](video_extraction/README.md)
 
-**当前状态：已从组织树顶部录至目视确认的实际底部，最终交付在 `delivery/20260921-050012/`。** 合并视频约 9 小时 53 分钟、586 MiB；44 段共 9172 行，包括 7373 次人员出现和 1799 次部门出现，不是独立人数。43 段原始审计通过，1 段保留哈希绑定的视频退出尾部复核例外。完整解码和索引检查通过，详见交付目录的 `交付说明.md`、`verification.json` 及 `VALIDATION.md`。这是面向所给截图浅色主题的程序，不是通用企业微信通讯录导出工具。
+将当前账号可见的企业微信组织树逐行浏览、录成视频，再从稳定的个人详情画面提取姓名、工号、职务和部门路径，导出人员表及人员—部门关系表。
 
-历史 `batch-status.json` 和 manifest 末段保留页脚误判时的 `blocked`，后续独立树底确认见最终 verification；未将原始运行状态改写为成功，也未宣称企业接口层面的完整性。
+本仓库整合两套程序：**Windows 桌面浏览录屏**与**视频人员信息提取**。公开版本只包含代码、文档和虚构测试数据，不包含通讯录、视频、截图、API Key 或本机校准配置。
 
-## 快速启动
+## 哪些步骤使用模型？
 
-当前电脑的 `.venv` 已准备好，可直接从第 3 步开始，双击 `launch.cmd`。下面第 1–2 步用于换机或重建环境。
+| 阶段 | 技术 | 模型依赖 |
+|---|---|---|
+| 打开企业微信、窗口归位、点击组织树 | Windows API + OpenCV 模板匹配 | 无 |
+| 录制、合并视频 | FFmpeg，默认 4 FPS | 无 |
+| 扫描视频变化、选取稳定画面 | OpenCV | 无 |
+| 读取个人详情中的姓名、职务、工号、部门 | OpenAI 兼容的图像接口 | 当前代码固定使用 `Qwen3.6-35B-A3B` |
+| 按工号归并、保留多部门关系、生成 CSV | Python 规则 | 无 |
 
-1. 在本目录打开 PowerShell，执行 `powershell -ExecutionPolicy Bypass -File .\setup.ps1`。仅在本目录建立虚拟环境，首次需下载依赖；要求 Python 3.13。
-2. FFmpeg 需在 PATH，或在生成的 `config.json` 中设置 `ffmpeg` 完整路径。本机已经发现 FFmpeg，但不把本机绝对路径硬编码到程序。
-3. 打开企业微信通讯录，在**主显示器**固定窗口大小和位置，组织树滚到最顶部。画面同时保留一个收起部门和一个展开部门作为箭头样本。运行 `launch.cmd` 选择 1。
-4. 5 秒内切回企业微信。依次框选：组织树内容（排除标题和滚动条）、录屏范围（包含树及完整右侧资料）、一个向右小箭头、一个向下小箭头、一个未选中部门的蓝色文件夹图标。箭头紧框，勿包含文件夹；文件夹紧框，勿包含箭头和文字。树顶边放在首行中心上方约半行，确保首行完整。
-5. 打开 `calibration-preview.png`：每个完整可见节点应有一个框；收起箭头红圈、展开箭头绿圈。漏框、多框、错圈时重新校准。截图示例行距 36 像素；缩放不同时使用 `.\.venv\Scripts\python.exe app.py calibrate --spacing 你的实际行距`。
-6. 树重新滚至顶部，运行 `launch.cmd` 选择 2，先试跑 10 行。核对视频/PNG：每次蓝色选择确实移动，右侧显示相应资料，文字清晰。需验证部门展开和至少一次跨屏滚动时，可用 `app.py run --limit 40 --snapshots` 做更长试跑。
-7. 试跑合格后，将树滚回顶部，选择 3 连续运行。不按名字去重；同一人在多个部门出现会重复录制。部门整行点击会切换展开状态，因此程序会在录制部门后检查并确保它最终展开。
+原来的“无需大模型”指录屏程序。**合并后的完整流程包含视觉模型调用**：所选详情图片会发送至你配置的服务地址，请只使用获准处理该数据的服务。模型推理由服务端完成；本机无需 GPU。另保留 PaddleOCR-VL OCR/字幕工具，它不是桌面详情抽取命令的必经步骤。
 
-## 续录与校验
+## 完整流程
 
-长时间录制可运行 `python batch_run.py --after runs\上一段目录`：默认每段 500 行，正常结束并通过审计后自动续录，最多 60 段、12 小时（在段与段之间检查总时长）。有意停止或错误不会自动重试。`python progress.py` 可只读查看整条录像链的进度；`batch-status.json` 保存当前段位置。
-
-上一段使用 `--snapshots`，且当前树仍保持上一段结束时的画面，可使用：
-
-```powershell
-.\.venv\Scripts\python.exe app.py run --resume 'runs\上一段目录' --snapshots
-.\.venv\Scripts\python.exe audit_run.py 'runs\本段目录'
+```mermaid
+flowchart TD
+    A[首次校准窗口与导航样本] --> B[自动打开企业微信并恢复固定布局]
+    B --> C[用户回到树顶，短试跑后开始录屏]
+    C --> D[逐行点击和停留，展开部门，核对滚动衔接]
+    D --> E[审计分段并合并视频]
+    E --> F[扫描详情区域变化，选择稳定区间中间帧]
+    F --> G[人工检查裁剪图，再调用视觉模型]
+    G --> H[按工号归并人员，展开多部门关系]
+    H --> I[人员表、关系表、职务表及待复核表]
 ```
 
-续录会比对树区域与上一段末帧；布局或内容不同就拒绝启动，不能据此盲目恢复任意中断状态。各段保留独立视频，配置中的 `resume_from` 记录衔接关系。每段节点计数从 1 重新开始。审计检查视频时长、事件序号和 PNG 连续性，不证明人数或完整覆盖。
+## 安装
 
-如果上一段因“滚动衔接”失败结束，且界面仍停在该次滚动后的画面，可在上述续录命令加 `--resume-after-scroll`。程序必须重新找到最后选中行，并匹配上一行上下文，才允许从下一行继续；恢复截图和位移会保存在新段中。人员头像异步变化时允许使用唯一的选中姓名笔画匹配，其他不确定情况仍停止。此参数不能恢复任意滚动、重排或重新打开后的通讯录。
+录屏需要 Windows、Python 3.13、企业微信桌面客户端，以及已加入 PATH 的 FFmpeg/ffprobe。已验证的界面为主屏浅色主题。视频解析可独立运行，但其他系统未作本次实机验证。
 
-## 操作与产物
+```powershell
+git clone https://github.com/AetherX-Technologies/wecom-directory-recorder.git
+cd wecom-directory-recorder
+powershell -ExecutionPolicy Bypass -File .\setup.ps1
+# 如需视频信息提取，再安装解析模块到同一个虚拟环境：
+.\.venv\Scripts\python.exe -m pip install -e .\video_extraction
+```
 
-滚动后还会额外观察至少五秒，连续两秒图像稳定才定位下一行。因滚动后的“相邻节点间距”或“未确认目标行被选中”异常停止，也可使用上述 `--resume-after-scroll` 双重图像校验恢复；须先确认并恢复最后已记录节点的选中状态，校验失败时仍需检查现场画面。
+`setup.ps1` 只安装录屏依赖；上面的第二条安装命令不调用模型。不要安装来源目录中旧版的动态发布脚本，本仓库使用固定版本的 `pyproject.toml`。
 
-- F8 暂停/继续；Esc 停止；鼠标移至主屏左上角停止。暂停时视频继续录制。正常录制会占用当前桌面，请不要同时使用鼠标键盘处理其他工作。
-- 在程序目录创建名为 `STOP` 的文件也会正常结束录屏；下一次运行前需自行移除该文件。
-- 默认每行停留 2.5 秒，部门展开后再等 1.5 秒；录制 4 FPS、H.264、CRF 18，编码最多两个线程。无 GPU 要求，已做资源采样（见 VALIDATION.md）。2,000 行仅固定停留约 83 分钟，另加展开、滚动和图像处理时间。
-- 慢页面可用 `app.py run --dwell 4`；配置文件还可调整 `expand_wait` / `scroll_wait`。选中延迟时最多额外等待 10 秒，确认后重新停留；**蓝色行选中不代表右侧资料已加载完成**，需通过试跑定停留时间。
-- 输出 `runs/日期时间/capture.mkv`、`events.jsonl`、`summary.json`、`ffmpeg.log`。可加 `--snapshots` 保存无损 PNG，方便 OCR，代价是磁盘占用。
-- 最大 10,000 行、180 分钟，达到上限按部分结果结束，可在配置中修改。日志中的 `visited_rows` 是点击行数，包含部门和重复人员，不能当人数。
-- 当前实机配置为每行停留 5 秒、`scroll_notches=3`，上限 30,000 行、720 分钟；新增校准仍使用默认停留 2.5 秒。这些上限不代表独立人数。
-- 每个滚轮刻度独立发送。此前 6 刻度曾通过短试跑，但长录制出现滚动越过锚点，后续改为 3 刻度完成录制；系统滚动设置不同或衔接丢失时，可改回 1 刻度并重新试跑。
+## 1. 校准与自动打开
 
-## 如何减少漏项
+想先验证解析环境，可运行完全离线的虚构样例（输出目录须尚不存在）：
 
-在树的小图中识别深色文字/头像与蓝色图标。先点该行右侧空白，确认蓝色选中并停留；部门行随后检查箭头，只在收起状态时再展开，避免二次点击又收回子节点。走到可见区域底部时，保留最后一行图像，滚动后用图像匹配找到这一行的新位置，从它的下一行继续。选中行的箭头反色也可匹配。当前实机已增加文件夹模板，若发现文件夹但箭头方向不明确则停止。
+```powershell
+.\.venv\Scripts\python.exe video_extraction/examples/offline_demo.py --output-dir outputs/offline-demo
+```
 
-衔接丢失、重复图像产生歧义、窗口移动/失焦、未选中目标、录屏退出时停止。Windows 的 `Ghost` 无响应替代窗口出现时，先暂停输入最多 30 秒；仅原企业微信窗口恢复前台才继续，等待时间不计入详情停留，超时或转到其他窗口仍停止。三次滚动未移动仅报告 `end_candidate`（可能到达末尾），`coverage_verified` 始终为 false，需对照真实树核对。**不会把不确定的结果标成全量完成。**
+它生成一段测试视频，用固定模型替身验证选帧、解析和导出，预期得到 1 名虚构人员及 2 条部门关系，不代表真实模型识别准确率。
 
-失焦停止后若存在延后滚动，也可显式使用 `--resume-after-scroll`；必须先恢复最后已记录节点的选中状态，并通过最后行及上一行的双重图像核验。
+1. 打开企业微信通讯录，固定窗口，树滚到最顶部，同时保留一个展开部门和一个收起部门。
+2. 双击 `launch.cmd`，选 **1**，框选树区、录屏区、两种箭头及文件夹，检查生成的识别预览。
+3. 选 **5**，保存一次通讯录入口小图标、全体/组织入口和固定标题样本。
+4. 此后双击 `open-wecom.cmd`，或菜单选 **4**，自动找窗口、恢复校准时位置尺寸并进入通讯录。
 
-限制：当前算法依赖浅色主题、固定行距、蓝色选中条、可识别箭头及行空白可点击。箭头模板可能漏识别；预览只能验证当前屏，不能证明后续所有部门都适配。自绘样式变化、动态加载慢、树结构变动、超深层级导致图标移出可视区、弹窗遮挡、滚动一次超过整屏，都可能要求重新适配。首版不自动点击“座机：点击查看”，只录制当前默认可见资料；不操作发消息、写邮件或语音通话。
+自动打开不自动登录、不开始录屏、不保证回到树顶，也不定位任意指定部门。窗口可以在启动前被移动或缩放，程序会恢复旧布局；录制期间移动或缩放会触发停止。更换 DPI、主题或内部面板布局时须重新校准。配置和图标仅保存在本机，克隆仓库后需要自己设置。
 
-如果试跑不能选中行或准确展开，请保留对应运行目录和错误说明用于后续适配。不要直接长时间批量运行。重新启动企业微信或改变 DPI/窗口位置后重新校准。
+## 2. 试跑、录制与合并
 
-## 开发验证
+树回到顶部后，菜单选 **2** 试跑 10 行并保存 PNG。确认部门展开、选中状态和右侧文字都正确后，新录制再次回到顶部：
 
-`.\.venv\Scripts\python.exe -m unittest -v`
+```powershell
+.\.venv\Scripts\python.exe app.py run --dwell 5 --snapshots
+```
 
-单元测试不操作真实桌面，当前 34 项通过；实机证据另见 `VALIDATION.md`。研究对比和来源见 `RESEARCH.md`。
+F8 暂停/继续，Esc 或鼠标移到屏幕左上角停止，也可在程序目录创建 `STOP` 文件。正常录制占用当前桌面。默认上限为 10,000 行、180 分钟，可在 `config.json` 调整；达到上限表示部分完成。
 
-可选 `footer.png` 是本次已核对的“共6547人”页脚样本。仅在树底部一个行距范围内、水平居中位置、匹配分数至少 0.98 时排除该未选中页脚行；选中人员不排除。这不是通用页脚识别，人数或样式变化后不匹配，仍可能保护停止，需重新核对并更新模板。
+每段位于 `runs/<运行目录>/`，包含视频、日志、摘要及可选逐行截图。将下面的 `RUN_ID` 替换为实际目录名：
 
-录制链结束后，可用 `python assemble.py runs\最后一段目录` 自动追溯 `resume_from`，审计每段并无损合并视频，输出 `delivery\时间\capture-all.mkv`、逐行 PNG 索引和 manifest。试跑链也可合并，manifest 的末段状态会保留 `limit_reached`，不能把试跑视频当成全量。
+```powershell
+.\.venv\Scripts\python.exe audit_run.py .\runs\RUN_ID
+# 保持上一段的窗口、布局及末尾画面，显式续录：
+.\.venv\Scripts\python.exe app.py run --resume .\runs\RUN_ID --snapshots
+# 或由分段脚本在审计合格的正常分段之后接续：
+.\.venv\Scripts\python.exe batch_run.py --after .\runs\RUN_ID
+# 完成后传入链中最后一段：
+.\.venv\Scripts\python.exe assemble.py .\runs\LAST_RUN_ID
+```
+
+合并产物在 `delivery/<时间>/`：`capture-all.mkv`、`frames.jsonl` 和 `manifest.json`。三次滚动未移动只报告末尾候选，需要观察真实树底；日志行数含部门和重复人员，不是独立人数。详细恢复与审计规则见[录屏指南](RECORDER_GUIDE.md)。
+
+## 3. 先离线选帧，检查裁剪范围
+
+以下命令从仓库根目录执行。将 `YOUR_DELIVERY` 换成实际交付目录，并为每个视频使用独立输出目录。
+
+```powershell
+.\.venv\Scripts\python.exe -m rapid_videocr.wechat_detail_extractor `
+  --video ".\delivery\YOUR_DELIVERY\capture-all.mkv" `
+  --output-dir ".\outputs\demo" `
+  --selection-only
+```
+
+这一步不调用模型。打开 `outputs/demo/frames/` 检查选帧是否清晰、完整包含姓名下方职务、工号及全部部门路径。
+
+**当前裁剪适配 984×794 的“左侧树 + 右侧详情”录像布局**：横向取 41.5%–87.5%，纵向取 7.5%–91%。比例缩放不等于适配任意画面；若录屏范围或详情布局不同，需要调整 `compose_wechat_detail_roi()`，更换输出目录并重新选帧。默认每秒检查 4 帧，4 FPS 视频会检查每一帧；较高帧率视频按采样率检查变化。
+
+## 4. 配置视觉服务，再做小批量识别
+
+```powershell
+Copy-Item .\video_extraction\.env.example .\.env
+```
+
+编辑根目录 `.env`，填写获准使用的完整接口地址、模型名和密钥：
+
+```dotenv
+VL_MODEL_URL=https://vision.example.com/v1/chat/completions
+VL_MODEL_NAME=Qwen3.6-35B-A3B
+VL_MODEL_KEY=replace-with-your-api-key
+VL_MODEL_TIMEOUT=180
+VL_MODEL_MAX_RETRIES=2
+```
+
+当前客户端严格校验模型名，并保留原项目的服务限制，不自动切换到其他模型。先处理少量选帧：
+
+```powershell
+.\.venv\Scripts\python.exe -m rapid_videocr.wechat_detail_extractor `
+  --video ".\delivery\YOUR_DELIVERY\capture-all.mkv" `
+  --output-dir ".\outputs\demo" `
+  --reuse-selection --workers 1 --batch-size 1 --limit 10
+```
+
+`--limit` 只限制本次分析范围，不限制前面的完整视频扫描。检查结果后去掉 `--limit 10`，按服务容量设置并发，例如 `--workers 4 --batch-size 4`。同一输出目录会按已保存结果恢复分析；**不要在更换视频、裁剪规则、模型或提示词后沿用旧输出目录**。程序不会根据退出码自动保证所有帧成功，须检查摘要和失败清单。
+
+## 5. 看哪些结果？
+
+| 文件 | 用途 |
+|---|---|
+| `wechat_people.csv` | 工号归并后的一人一行；检查 `review_status`，冲突记录也可能在表内 |
+| `wechat_memberships.csv` | 一人一部门一行，保留多部门路径，可据路径重建观察到的组织层级 |
+| `wechat_positions_all.csv` | 有可见职务的记录，包括缺工号但有职务的待核对项；不是完整员工名册 |
+| `wechat_people_with_positions.csv` | 人员表中有职务的子集 |
+| `wechat_review.csv` | 缺工号、工号无效、姓名/职务冲突或缺部门等复核项 |
+| `wechat_detail_observations.csv` | 每个画面的抽取记录及证据位置 |
+| `wechat_summary.json` | 已分析数、失败数、未解决帧数、是否限量运行 |
+| `unresolved_model_frames.jsonl` / `model_failures.jsonl` | 未完成帧和历次失败记录 |
+| `raw_model.jsonl` / `frames/` | 模型返回与选帧证据，用于回查 |
+
+工号按字符串保存，避免 Excel 吞掉前导零。同名不同工号不会合并；同一工号多部门保留多条关系。只有显示在画面中的信息可提取，隐藏电话等不展开。部门路径只能重建可观察层级，不能证明后台全部组织或无人部门都覆盖。
+
+人工核对后可提供 CSV，列为 `user_code,name,position,resolution_note,evidence`，通过 `--overrides .\local-only\review.csv` 应用姓名/职务修正。它不能替代原始证据核对，也不是任意部门关系替换接口。
+
+## 目录与开发验证
+
+```text
+app.py / vision.py / win_input.py   桌面遍历与停止保护
+startup.py / open-wecom.cmd         自动打开与窗口归位
+recorder.py / assemble.py           录屏、分段审计与合并
+video_extraction/rapid_videocr/     详情抽取、旧版 OCR、人员归并
+video_extraction/tests/             虚构样例与离线模型替身测试
+RECORDER_GUIDE.md / ALGORITHM.md    录屏用法与流程图
+```
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m unittest discover -s . -p "test_*.py"
+.\.venv\Scripts\python.exe -m pytest video_extraction/tests -q
+```
+
+解析测试禁止网络连接，使用虚构数据和生成的图像，不需要密钥。测试通过验证代码行为，不代表真实模型的准确率。公开整合验证见 [PUBLIC_RELEASE.md](PUBLIC_RELEASE.md)。
+
+## 来源与边界
+
+视频解析基于 [RapidVideOCR](https://github.com/SWHL/RapidVideOCR)，保留 Apache-2.0 许可证与作者标注，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。整合时保留了旧流程代码，但移除了仅针对私有数据的姓名/部门修正默认值和个人水印规则；详情页主流程不依赖这些私有规则。
+
+本项目不是官方企业微信接口或通用通讯录导出器。仅用于你获准处理的可见信息；识别、去重、路径和职务结果需要结合证据复核。本仓库不分发模型权重，也不会发布任何真实通讯录数据。

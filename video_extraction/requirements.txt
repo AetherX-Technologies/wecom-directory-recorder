@@ -1,0 +1,5 @@
+tqdm
+numpy
+opencv-python-headless
+shapely
+colorlog
