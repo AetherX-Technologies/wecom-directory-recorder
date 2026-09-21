@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+runs/
+config.json
+closed.png
+opened.png
+folder.png
+STOP
+batch-status.json
+batch-status.tmp
+calibration-preview.png
+footer.png
+delivery/
+evidence/
+.env
+.env.*
+!.env.example
