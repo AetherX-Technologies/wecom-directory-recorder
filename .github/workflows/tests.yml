@@ -2,6 +2,8 @@ name: Offline tests
 on: [push, pull_request]
 permissions:
   contents: read
+env:
+  PYTHONUTF8: '1'
 jobs:
   windows:
     runs-on: windows-latest

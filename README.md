@@ -39,6 +39,7 @@ flowchart TD
 ```powershell
 git clone https://github.com/AetherX-Technologies/wecom-directory-recorder.git
 cd wecom-directory-recorder
+$env:PYTHONUTF8 = "1"
 powershell -ExecutionPolicy Bypass -File .\setup.ps1
 # 如需视频信息提取，再安装解析模块到同一个虚拟环境：
 .\.venv\Scripts\python.exe -m pip install -e .\video_extraction

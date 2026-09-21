@@ -12,3 +12,5 @@
 These checks validate installation and offline pipeline behavior, not model accuracy, arbitrary WeCom layouts, complete directory coverage, or a fresh cold-start desktop session. The public repository deliberately contains no real directory dataset or calibration templates.
 
 GitHub Actions includes the same offline test commands. Local passing results do not imply that a remote CI run has already passed.
+
+首轮 GitHub Windows 测试遇到默认 CP1252 编码无法输出中文日志；已在工作流设置 `PYTHONUTF8=1`，并在中英文安装命令中补充同样的会话设置。该失败发生在日志输出，保留历史失败记录并重跑验证。

@@ -37,6 +37,7 @@ Recording requires Windows, Python 3.13, WeCom, and FFmpeg/ffprobe on PATH. The 
 ```powershell
 git clone https://github.com/AetherX-Technologies/wecom-directory-recorder.git
 cd wecom-directory-recorder
+$env:PYTHONUTF8 = "1"
 powershell -ExecutionPolicy Bypass -File .\setup.ps1
 # Optional: install the extraction package in the same environment.
 .\.venv\Scripts\python.exe -m pip install -e .\video_extraction
